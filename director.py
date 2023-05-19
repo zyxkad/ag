@@ -18,14 +18,14 @@ class _FPSTask: pass
 class Director:
 	INSTANCE = None
 
-	def __new__(cls):
+	def __new__(cls, *args, **kwargs):
 		if cls.INSTANCE is None:
 			cls.INSTANCE = super().__new__(cls)
-			cls.__init(cls.INSTANCE)
+			cls.__init(cls.INSTANCE, *args, **kwargs)
 		return cls.INSTANCE
 
 	@classmethod
-	def __init(cls, self):
+	def __init(cls, self, exit_when_quit: bool = True, destroy_when_quit: bool = True):
 		self._inited = False
 		self._scheduler = Scheduler()
 		self._fps = 30.0
@@ -36,7 +36,10 @@ class Director:
 		self._clear_color = Colors.white
 		self._camera = Camera(0, 0)
 		self._keymap = {}
-		Events.QUIT.register(self.__exit, priority=LOWEST_PRIORITY)
+		if exit_when_quit:
+			Events.QUIT.register(self.__exit, priority=LOWEST_PRIORITY)
+		elif destroy_when_quit:
+			Events.QUIT.register(self.destroy, priority=LOWEST_PRIORITY)
 
 	def __exit(self):
 		self.destroy()
