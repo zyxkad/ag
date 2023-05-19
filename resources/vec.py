@@ -90,10 +90,13 @@ class Vec2:
 		return Vec2(self.x % other.x, self.y % other.y)
 
 	def distance_to(self, other: float | tuple[float, float] | Vec2Self) -> float:
+		return math.sqrt(self.distance_to2(other))
+
+	def distance_to2(self, other: float | tuple[float, float] | Vec2Self) -> float:
 		if not isinstance(other, Vec2):
 			other = Vec2(other)
 		dx, dy = self.x - other.x, self.y - other.y
-		return math.sqrt(dx * dx + dy * dy)
+		return dx * dx + dy * dy
 
 	def in_range(self, other: float | tuple[float, float] | Vec2Self, range: float) -> bool:
 		if not isinstance(other, Vec2):
