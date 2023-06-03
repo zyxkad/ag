@@ -1,11 +1,14 @@
 # Copyright (C) 2023 zyxkad@gmail.com
 
+from __future__ import annotations
+
 import enum
 from typing import TypeVar, Iterable
-import pygame
 
 from .color import *
 from .vec import *
+
+import pygame
 
 __all__ = [
 	'Anchor',
@@ -69,21 +72,22 @@ class Surface:
 
 	@property
 	def alpha(self) -> int:
-		return self._obj.get_alpha()
+		alpha = self._obj.get_alpha()
+		return 0xff if alpha is None else alpha
 
 	@alpha.setter
 	def alpha(self, alpha: int):
 		self._obj.set_alpha(alpha)
 
-	def copy(self) -> Self:
-		return self.__class__(self._obj.copy())
+	def copy(self) -> Surface:
+		return Surface(self._obj.copy())
 
 	def clone_from(self, other: Self):
 		assert self.size == other.size, f'Surface size {self.size} is not equals {other.size}'
 		self._obj.get_buffer().write(other._obj.get_buffer().raw)
 
 	def fill(self, color: Color, dest: Rect | None = None):
-		if not dest:
+		if dest is None:
 			dest = Rect(0, 0, self.size)
 		self._obj.fill(color.rgba, tuple(dest))
 
@@ -99,9 +103,9 @@ class Surface:
 	def polygon(self, color: Color, points: Iterable[Vec2], width: int = 0):
 		pygame.draw.polygon(self._obj, color.rgba, [p.xy for p in points], width=width)
 
-	def blit(self, src: Self | pygame.Surface, dest: Vec2 | tuple[float, float], anchor: Anchor = Anchor.CENTER):
+	def blit(self, src: Surface | pygame.Surface, dest: Vec2 | tuple[float, float], anchor: Anchor = Anchor.CENTER):
 		if not isinstance(src, Surface):
-			src = Surface(src._obj)
+			src = Surface(src)
 		self._obj.blit(src._obj, anchor.convert_pos(dest, src.size).xy)
 
 	def get_at(self, pos: tuple[int, int]) -> Color:
@@ -109,4 +113,4 @@ class Surface:
 		return Color(c.r, c.g, c.b, c.a)
 
 	def set_at(self, pos: tuple[int, int], color: Color):
-		self._obj.set_at(pos, tuple(color))
+		self._obj.set_at(pos, color.rgba)

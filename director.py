@@ -1,22 +1,35 @@
 # Copyright (C) 2023 zyxkad@gmail.com
 
-from .resources import *
-from .camera import *
-from .nodes import *
-from .event import *
-from .scheduler import *
-
+import enum
 import sys
+import time
+
+from .resources import Color, Colors, Vec2, Surface
+from .camera import Camera, CameraSurface
+from .nodes import Node, Scene, UILayer
+from .event import (Event, EventTarget, LOWEST_PRIORITY,
+	QuitEvent, UIEvent, LoadEvent,
+	KeyboardEvent, MouseMoveEvent, MouseClickEvent, MouseOverEvent,
+	MOUSE_MAIN_BUTTON)
+from .scheduler import Scheduler, IntervalTask
+
 import pygame
 
 __all__ = [
+	'QuitBehavior',
 	'Director'
 ]
 
-class _FPSTask: pass
 
-class Director:
+class QuitBehavior(enum.Enum):
+	EXIT_WHEN_QUIT = enum.auto()
+	DESTROY_WHEN_QUIT = enum.auto()
+	CUSTOM_WHEN_QUIT = enum.auto()
+
+class Director(EventTarget):
 	INSTANCE = None
+
+	_double_click_interval = 0.4
 
 	def __new__(cls, *args, **kwargs):
 		if cls.INSTANCE is None:
@@ -24,10 +37,30 @@ class Director:
 			cls.__init(cls.INSTANCE, *args, **kwargs)
 		return cls.INSTANCE
 
+	def __init__(self, *args, **kwargs):
+		pass
+
+	_inited: bool
+	_scheduler: Scheduler | None
+	_fps: float
+	__frames_sec: float
+	__counted_f: int
+	__real_fps: float
+	_scenes: list[Scene]
+	_clear_color: Color
+	_camera: Camera
+	_keymap: dict[int, bool]
+	_mouseflags: int
+	__last_click: float | None
+	__dbclick: bool
+	_mousemoving: Node | None
+	_focused: Node | None
+
 	@classmethod
-	def __init(cls, self, exit_when_quit: bool = True, destroy_when_quit: bool = True):
+	def __init(cls, self, quit_behavior: QuitBehavior = QuitBehavior.EXIT_WHEN_QUIT):
+		super().__init__(self)
 		self._inited = False
-		self._scheduler = Scheduler()
+		self._scheduler = None
 		self._fps = 30.0
 		self.__frames_sec = 0
 		self.__counted_f = 0
@@ -36,10 +69,16 @@ class Director:
 		self._clear_color = Colors.white
 		self._camera = Camera(0, 0)
 		self._keymap = {}
-		if exit_when_quit:
-			Events.QUIT.register(self.__exit, priority=LOWEST_PRIORITY)
-		elif destroy_when_quit:
-			Events.QUIT.register(self.destroy, priority=LOWEST_PRIORITY)
+		self._mouseflags = 0
+		self.__last_click = None
+		self.__dbclick = False
+		self._mousemoving = None
+		self._focused = None
+
+		if quit_behavior is QuitBehavior.EXIT_WHEN_QUIT:
+			self.register('quit', lambda e: self.__exit(), priority=LOWEST_PRIORITY)
+		elif quit_behavior is QuitBehavior.DESTROY_WHEN_QUIT:
+			self.register('quit', lambda e: self.destroy(), priority=LOWEST_PRIORITY)
 
 	def __exit(self):
 		self.destroy()
@@ -50,7 +89,8 @@ class Director:
 		return self._inited
 
 	@property
-	def scheduler(self):
+	def scheduler(self) -> Scheduler:
+		assert self._scheduler is not None
 		return self._scheduler
 
 	def _end(self):
@@ -68,7 +108,7 @@ class Director:
 		self.__real_fps = 0.0
 		pygame.init()
 
-	def init_with_window(self, size: Vec2, title: str = None):
+	def init_with_window(self, size: Vec2, title: str | None = None):
 		self.init()
 		self.winsize = size
 		if title is not None:
@@ -120,11 +160,11 @@ class Director:
 	def title(self) -> str:
 		captions = pygame.display.get_caption()
 		if len(captions) == 0:
-			return None
+			return ''
 		return captions[0]
 
 	@title.setter
-	def title(self, title: str) -> str:
+	def title(self, title: str):
 		pygame.display.set_caption(title)
 
 	@property
@@ -132,9 +172,9 @@ class Director:
 		return self._clear_color
 
 	@clear_color.setter
-	def clear_color(self, color: Color | tuple):
+	def clear_color(self, color: Color | tuple[int, int, int]):
 		if not isinstance(color, Color):
-			color = Color(color)
+			color = Color(*color)
 		self._clear_color = color
 
 	@property
@@ -152,26 +192,169 @@ class Director:
 	def is_keydown(self, key: int) -> bool:
 		return self._keymap.get(key, False)
 
-	def update(self, dt: float):
+	def __get_ctrl_keys(self) -> dict[str, bool]:
+		return {
+			'alt': self.is_keydown(pygame.K_LALT) or self.is_keydown(pygame.K_RALT),
+			'ctrl': self.is_keydown(pygame.K_LCTRL) or self.is_keydown(pygame.K_RCTRL),
+			'meta': self.is_keydown(pygame.K_LMETA) or self.is_keydown(pygame.K_RMETA),
+			'shift': self.is_keydown(pygame.K_LSHIFT) or self.is_keydown(pygame.K_RSHIFT),
+		}
+
+	@property
+	def mouseflags(self) -> int:
+		return self._mouseflags
+
+	def is_mousedown(self, btn: int) -> bool:
+		return bool(self.mouseflags & (1 << btn))
+
+	def _get_reachable_node_at(self, x: int, y: int) -> list[tuple[Node, Vec2]]:
+		assert self.current_scene is not None, 'Main loop is not running'
+		pos = Vec2(x - self.camera.x, y - self.camera.y)
+		nodes = self.current_scene._get_reachable_nodes_by_pos(pos)
+		return [(self.current_scene, pos)] if nodes is None else nodes
+
+	def __on_mouse_move(self, dx: int, dy: int, x: int, y: int) -> bool:
+		targets = self._get_reachable_node_at(x, y)
+		target = targets[0][0]
+		e = MouseMoveEvent(target, dx=dx, dy=dy,
+			x=x, y=y, viewX=x - self.camera.x, viewY=y - self.camera.y,
+			screenX=x, screenY=y, buttons=self.mouseflags,
+			**self.__get_ctrl_keys())
+		if not self.dispatch(e, capture=True):
+			return False
+		for n, pos in reversed(targets):
+			e._x, e._y = pos.xy
+			if not EventTarget.dispatch(n, e, capture=True):
+				return False
+		for n, pos in targets:
+			e._x, e._y = pos.xy
+			if not EventTarget.dispatch(n, e, capture=False):
+				return False
+		if not self.dispatch(e, capture=False):
+			return False
+		if self._mousemoving is not target:
+			old = self._mousemoving
+			if old is not None:
+				old.dispatch(MouseOverEvent('mouseleave', old, target,
+					x=x, y=y, viewX=x - self.camera.x, viewY=y - self.camera.y,
+					screenX=x, screenY=y, buttons=self.mouseflags,
+					**self.__get_ctrl_keys()))
+				old.dispatch(MouseOverEvent('mouseout', old, target, bubbles=True,
+					x=x, y=y, viewX=x - self.camera.x, viewY=y - self.camera.y,
+					screenX=x, screenY=y, buttons=self.mouseflags,
+					**self.__get_ctrl_keys()))
+			self._mousemoving = target
+			target.dispatch(MouseOverEvent('mouseenter', target, old,
+				x=x, y=y, viewX=x - self.camera.x, viewY=y - self.camera.y,
+				screenX=x, screenY=y, buttons=self.mouseflags,
+				**self.__get_ctrl_keys()))
+			target.dispatch(MouseOverEvent('mouseover', target, old, bubbles=True,
+				x=x, y=y, viewX=x - self.camera.x, viewY=y - self.camera.y,
+				screenX=x, screenY=y, buttons=self.mouseflags,
+				**self.__get_ctrl_keys()))
+		return True
+
+	def __dispatch_click_event(self, etype: str, btn: int, x: int, y: int, targets: list[tuple[Node, Vec2]]) -> bool:
+		target = targets[0][0]
+		e = MouseClickEvent(etype, target, btn,
+			x=x, y=y, viewX=x - self.camera.x, viewY=y - self.camera.y,
+			screenX=x, screenY=y, buttons=self.mouseflags,
+			**self.__get_ctrl_keys())
+		if not self.dispatch(e, capture=True):
+			return False
+		for n, pos in reversed(targets):
+			e._x, e._y = pos.xy
+			if not EventTarget.dispatch(n, e, capture=True):
+				return False
+		for n, pos in targets:
+			e._x, e._y = pos.xy
+			if not EventTarget.dispatch(n, e, capture=False):
+				return False
+		return self.dispatch(e, capture=False)
+
+	def __on_mouse_down(self, btn: int, x: int, y: int) -> None:
+		self._mouseflags |= 1 << btn
+		targets = self._get_reachable_node_at(x, y)
+		target = targets[0][0]
+		self.__dispatch_click_event('mousedown', btn, x, y, targets)
+		if btn == MOUSE_MAIN_BUTTON:
+			if self.__last_click is None:
+				self.__last_click = time.time()
+			else:
+				if time.time() - self.__last_click <= self._double_click_interval:
+					self.__dbclick = True
+				self.__last_click = None
+		if self._focused is not target:
+			if self._focused is not None:
+				self._focused.dispatch(UIEvent('focusout', self._focused))
+				self._focused._focusing = False
+			if target.selectable and target.dispatch(UIEvent('focusin', target, cancelable=True)):
+				self._focused = target
+				target._focusing = True
+				target.dispatch(UIEvent('focus', target))
+
+	def __on_mouse_up(self, btn: int, x: int, y: int) -> None:
+		self._mouseflags &= ~(1 << btn)
+		targets = self._get_reachable_node_at(x, y)
+		self.__dispatch_click_event('mouseup', btn, x, y, targets)
+		self.__dispatch_click_event('click', btn, x, y, targets)
+		if btn == MOUSE_MAIN_BUTTON and self.__dbclick:
+			self.__dbclick = False
+			self.__dispatch_click_event('dbclick', btn, x, y, targets)
+
+	def __on_text_editing(self, text: str, start: int, length: int) -> None:
+		return
+
+	def __on_text_input(self, text: str) -> None:
+		return
+
+	def update(self, dt: float) -> None:
+		e: Event
 		for event in pygame.event.get():
 			if event.type == pygame.QUIT:
-				Events.QUIT.emit()
-			elif event.type == pygame.KEYUP:
-				self._keymap[event.dict['key']] = False
-				Events.KEYUP.emit(event.dict)
+				self.dispatch(QuitEvent())
 			elif event.type == pygame.KEYDOWN:
 				self._keymap[event.dict['key']] = True
-				Events.KEYDOWN.emit(event.dict)
+				e = KeyboardEvent('keydown', self, event.dict['key'], **self.__get_ctrl_keys())
+				self.dispatch(e)
+			elif event.type == pygame.KEYUP:
+				self._keymap[event.dict['key']] = False
+				e = KeyboardEvent('keyup', self, event.dict['key'], **self.__get_ctrl_keys())
+				self.dispatch(e)
 			elif event.type == pygame.MOUSEMOTION:
-				Events.MOUSEMOVE.emit(event.dict)
-			elif event.type == pygame.MOUSEBUTTONUP:
-				Events.MOUSEUP.emit(event.dict)
+				dx, dy = event.dict['rel']
+				x, y = event.dict['pos']
+				self.__on_mouse_move(dx, dy, x, y)
 			elif event.type == pygame.MOUSEBUTTONDOWN:
-				Events.MOUSEDOWN.emit(event.dict)
+				x, y = event.dict['pos']
+				btn = event.dict['button'] - 1
+				assert btn >= 0
+				self.__on_mouse_down(btn, x, y)
+			elif event.type == pygame.MOUSEBUTTONUP:
+				x, y = event.dict['pos']
+				btn = event.dict['button'] - 1
+				assert btn >= 0
+				self.__on_mouse_up(btn, x, y)
+			elif event.type == pygame.TEXTEDITING:
+				self.__on_text_editing(event.dict['text'], event.dict['start'], event.dict['length'])
+			elif event.type == pygame.TEXTINPUT:
+				self.__on_text_input(event.dict['text'])
+			elif event.type == pygame.ACTIVEEVENT:
+				pass # { gain: int-bool, state: 1 for pointer; 2 for focus }
+			elif event.type == pygame.WINDOWENTER:
+				self.dispatch(UIEvent('mouseenter', self))
+			elif event.type == pygame.WINDOWLEAVE:
+				self.dispatch(UIEvent('mouseleave', self))
+			elif event.type == pygame.WINDOWFOCUSGAINED:
+				self.dispatch(UIEvent('winfocusin', self))
+			elif event.type == pygame.WINDOWFOCUSLOST:
+				self.dispatch(UIEvent('winfocusout', self))
 			else:
-				Events.EVENT.emit(event)
+				print('[DBUG] unknown event:', event.type, event)
 
 	def draw_scene(self, dt: float):
+		assert self.current_scene is not None
+
 		self.__frames_sec += dt
 		self.__counted_f += 1
 		if self.__counted_f >= self.fps:
@@ -180,9 +363,10 @@ class Director:
 			self.__counted_f = 0
 
 		osurface = pygame.display.get_surface()
-		surface = CameraSurface(self._camera, osurface)
+		surface = CameraSurface(self.camera, osurface)
 		surface.fill(self.clear_color)
 
+		self.current_scene.on_draw(surface.get_origin())
 		uis = []
 		lys = []
 		for c in self.current_scene.children:
@@ -192,19 +376,15 @@ class Director:
 				lys.append(c)
 		que = list(sorted(uis, key=lambda n: n.z_index, reverse=True))
 		que.extend(sorted(lys, key=lambda n: n.z_index, reverse=True))
-		que.append(self.current_scene)
 		while len(que) > 0:
 			n = que.pop(-1)
 			que.extend(sorted(n.children, key=lambda n: n.z_index, reverse=True))
-			if isinstance(n, (Scene, UILayer)):
+			if isinstance(n, UILayer):
 				n.on_draw(surface.get_origin())
-			else:
-				if n.width == 0 and n.height == 0:
-					n.on_draw(surface)
-				else:
-					s = Surface((n.width, n.height))
-					n.on_draw(s)
-					surface.blit(s, Vec2(n.x, n.y))
+			elif n.width >= 0 and n.height >= 0:
+				s = Surface((n.width, n.height))
+				n.on_draw(s)
+				surface.blit(s, Vec2(n.x, n.y))
 		pygame.display.update()
 
 	@property
@@ -220,49 +400,44 @@ class Director:
 		assert len(self._scenes) == 0, 'Main loop is started'
 		self.scheduler.add_interval(self.update, 0.05)
 		self.scheduler.put_task(_FPSTask(self.scheduler.time + self.spf, self.draw_scene, self))
-		foreach_call(scene, lambda n: n.on_enter())
 		scene.scheduler = self.scheduler
 		self._scenes.append(scene)
-		foreach_call(scene, lambda n: n.on_entered())
+		scene.foreach_child(lambda n: n.dispatch(LoadEvent('load', n)))
 		self._loop()
 
 	def push_scene(self, scene: Scene):
-		assert len(self._scenes) > 0, 'Cannot use `push_scene` to start main loop'
-		foreach_call(scene, lambda n: n.on_enter())
+		assert self.current_scene is not None, 'Cannot use `push_scene` to start main loop'
 		scene.scheduler = self.scheduler
 		self._scenes.append(scene)
-		foreach_call(scene, lambda n: n.on_entered())
+		scene.foreach_child(lambda n: n.dispatch(LoadEvent('load', n)))
 
 	def pop_scene(self):
-		assert len(self._scenes) > 0, 'Main loop not running'
-		s = self._scenes[-1]
-		foreach_call(s, lambda n: n.on_exit())
+		assert self.current_scene is not None, 'Main loop is not running'
+		old = self._scenes[-1]
+		old.foreach_child(lambda n: n.dispatch(LoadEvent('unload', n)))
 		self._scenes.pop(-1)
-		foreach_call(s, lambda n: n.on_exited())
 		if len(self._scenes) == 0:
 			self._end()
 
 	def pop_scene_to(self, level: int = 1):
-		assert len(self._scenes) > 0, 'Main loop not running'
+		assert self.current_scene is not None, 'Main loop is not running'
 		assert level >= 0
-		while len(self._scenes) > level:
-			s = self._scenes[-1]
-			foreach_call(s, lambda n: n.on_exit())
-			self._scenes = self._scenes[:-1]
-			foreach_call(s, lambda n: n.on_exited())
+		if len(self._scenes) > level:
+			old = self._scenes[-1]
+			old.foreach_child(lambda n: n.dispatch(LoadEvent('unload', n)))
+			while len(self._scenes) > level:
+				self._scenes = self._scenes[:-1]
 		if len(self._scenes) == 0:
 			self._end()
 
 	def replace_scene(self, scene: Scene):
-		assert len(self._scenes) > 0, 'Main loop not running'
-		s = self._scenes[-1]
-		foreach_call(s, lambda n: n.on_exit())
+		assert self.current_scene is not None, 'Main loop is not running'
+		old = self._scenes[-1]
+		old.foreach_child(lambda n: n.dispatch(LoadEvent('unload', n)))
 		self._scenes.pop(-1)
-		foreach_call(s, lambda n: n.on_exited())
-		foreach_call(scene, lambda n: n.on_enter())
+		scene.foreach_child(lambda n: n.dispatch(LoadEvent('load', n)))
 		scene.scheduler = self.scheduler
 		self._scenes[-1] = scene
-		foreach_call(scene, lambda n: n.on_entered())
 
 class _FPSTask(IntervalTask):
 	def __init__(self, start: float, cb, director: Director):

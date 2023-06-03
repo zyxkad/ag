@@ -1,27 +1,30 @@
 # Copyright (C) 2023 zyxkad@gmail.com
 
-from typing import Self
+from __future__ import annotations
 
-from ..event import *
+from typing import TypeVar, Generic, Callable
+
+from ..event import Event, EventTarget, LoadEvent
 from ..scheduler import *
-from ..resources import *
+from ..resources import Vec2, Surface
 from ..utils import *
 
 __all__ = [
 	'Node',
-	'foreach_call',
 ]
 
-class Node(EventEmitter):
-	def __init__(self, parent: Self | None = None, *,
+class Node(EventTarget):
+	def __init__(self, parent: Node | None = None, *,
 		tag: int | None = None, name: str | None = None,
 		scheduler: Scheduler | None = None,
 		x: float = 0, y: float = 0, width: float = 0, height: float = 0, 
 		z_index: int = 0, scale: tuple[float, float] = (1, 1),
-		visible: bool = True, rotation: float = 0):
+		visible: bool = True, rotation: float = 0,
+		selectable: bool = True):
+		super().__init__()
 		assert isinstance(parent, (Node, type(None)))
 		self._parent = parent
-		self._children = []
+		self._children: list[Node] = []
 		self._tag = tag
 		self._name = name
 
@@ -36,11 +39,38 @@ class Node(EventEmitter):
 		self._scaleY = scale[1]
 		self._visible = visible
 		self._rotation = rotation
-		self._event_cbs = {}
+		self._selectable = selectable
+		self._focusing = False
+
+		self._schedule_upadate_interval: float | None = None
+		self._update_task = None
+
+		self.register('load', self._on_load)
+		self.register('unload', self._on_unload)
+
+	def dispatch(self, event: Event, capture: bool | None = None):
+		if not event.bubbles:
+			super().dispatch(event, capture)
+			return
+		nodes = [self]
+		nodes.extend(self.parents)
+		for n in reversed(nodes):
+			EventTarget.dispatch(n, event, capture=True)
+		for n in nodes:
+			EventTarget.dispatch(n, event, capture=False)
 
 	@property
-	def parent(self) -> Self | None:
+	def parent(self) -> Node | None:
 		return self._parent
+
+	@property
+	def parents(self) -> list[Node]:
+		nodes = []
+		n = self
+		while n.parent is not None:
+			n = n.parent
+			nodes.append(n)
+		return nodes
 
 	@property
 	def children(self) -> list:
@@ -50,23 +80,22 @@ class Node(EventEmitter):
 	def children_len(self) -> int:
 		return len(self._children)
 
-	def add_child(self, child: Self, z_index: int | None = None, tag: int | None = None, name: str | None = None):
+	def add_child(self, child: Node, z_index: int | None = None, tag: int | None = None, name: str | None = None):
 		assert isinstance(child, Node)
 		if child.parent is not None:
 			raise RuntimeError('Target already have a parent')
-		if z_index is None:
-			z_index = child.z_index
-		else:
+		if z_index is not None:
 			child.z_index = z_index
 		if tag is not None:
 			child.tag = tag
 		if name is not None:
 			child.name = name
-		i = binSearch(self._children, lambda c: -1 if c.z_index <= z_index else 1)
+		i = binSearch(self._children, lambda c: -1 if c.z_index <= child.z_index else 1)
 		child._parent = self
 		self._children.insert(i, child)
+		child.dispatch(LoadEvent('load', child))
 
-	def get_child_by_tag(self, tag: int, grandchild: bool = False) -> Self:
+	def get_child_by_tag(self, tag: int, grandchild: bool = False) -> Node | None:
 		assert isinstance(tag, int)
 		for c in self._children:
 			if c.tag == tag:
@@ -78,7 +107,7 @@ class Node(EventEmitter):
 					return g
 		return None
 
-	def get_child_by_name(self, name: str, grandchild: bool = False) -> Self:
+	def get_child_by_name(self, name: str, grandchild: bool = False) -> Node | None:
 		assert isinstance(name, str)
 		for c in self._children:
 			if c.name == name:
@@ -90,70 +119,81 @@ class Node(EventEmitter):
 					return g
 		return None
 
-	def _remove_child_by_index(self, i: int):
-		c = self._children[i]
-		foreach_call(c, lambda n: n.on_exit())
-		self._children.pop(i)
-		c._parent = None
-		foreach_call(c, lambda n: n.on_exited())
-		return True
+	def reachable(self, pos: Vec2) -> bool:
+		return Vec2.ZERO <= pos and pos <= self.size
 
-	def remove_child(self, child: Self):
+	def _get_reachable_nodes_by_pos(self, pos: Vec2) -> list[tuple[Node, Vec2]] | None:
+		for c in reversed(self._children):
+			npos = pos - c.pos
+			n = c._get_reachable_nodes_by_pos(npos)
+			if n is not None:
+				n.append((c, npos))
+				return n
+		return [(self, pos)] if self.reachable(pos) else None
+
+	def __remove_child_by_index(self, i: int):
+		child = self._children[i]
+		child.dispatch(LoadEvent('unload', child))
+		self._children.pop(i)
+		child._parent = None
+
+	def remove_child(self, child: Node):
 		assert isinstance(child, Node)
 		assert child.parent is self
 		for i, c in enumerate(self._children):
 			if c is child:
-				return self._remove_child_by_index(i)
+				self.__remove_child_by_index(i)
+				return
 		raise RuntimeError('Unreachable statement')
 
 	def remove_child_by_tag(self, tag: int):
 		assert isinstance(tag, int)
 		for i, c in enumerate(self._children):
 			if c.tag == tag:
-				return self._remove_child_by_index(i)
+				return self.__remove_child_by_index(i)
 		raise RuntimeError('Tag not exists')
 
 	def remove_child_by_name(self, name: str):
 		assert isinstance(name, str)
 		for i, c in enumerate(self._children):
 			if c.name == name:
-				return self._remove_child_by_index(i)
+				return self.__remove_child_by_index(i)
 		raise RuntimeError('Name not exists')
 
 	def remove_all_children(self):
-		for c in self._children:
-			pass
-		self._children.clear()
+		while len(self._children) > 0:
+			self.__remove_child_by_index(0)
 
 	def remove_from_parent(self):
-		return self.parent.remove_child(self)
+		assert self.parent is not None
+		self.parent.remove_child(self)
 
 	@property
-	def tag(self) -> int:
+	def tag(self) -> int | None:
 		return self._tag
 
 	@tag.setter
-	def tag(self, tag: int):
+	def tag(self, tag: int | None):
 		self._tag = tag
 
 	@property
-	def name(self) -> str:
+	def name(self) -> str | None:
 		return self._name
 
 	@name.setter
-	def name(self, name: str):
+	def name(self, name: str | None):
 		self._name = name
 
 	@property
-	def scheduler(self) -> Scheduler:
+	def scheduler(self) -> Scheduler | None:
 		return self._scheduler or (None if self.parent is None else self.parent.scheduler)
 
 	@scheduler.setter
 	def scheduler(self, scheduler: Scheduler):
 		self._scheduler = scheduler
 
-	def schedule_update(self, interval: float = 0.05):
-		self.scheduler.add_interval(self.on_update, interval)
+	def schedule_update(self, interval: float | None = 0.05):
+		self._schedule_upadate_interval = interval
 
 	@property
 	def x(self) -> float:
@@ -239,12 +279,25 @@ class Node(EventEmitter):
 		assert isinstance(visible, bool)
 		self._visible = visible
 
-	def register_event(self, event, cb):
-		ls = self._event_cbs.get(event, None)
-		if ls is None:
-			self._event_cbs[event] = [cb]
-		else:
-			ls.append(cb)
+	@property
+	def rotation(self) -> float:
+		return self._rotation
+
+	@rotation.setter
+	def rotation(self, rotation: float):
+		self._rotation = rotation
+
+	@property
+	def selectable(self) -> bool:
+		return self._selectable
+
+	@selectable.setter
+	def selectable(self, selectable: bool):
+		self._selectable = selectable
+
+	@property
+	def focusing(self) -> bool:
+		return self._focusing
 
 	def on_draw(self, surface: Surface):
 		pass
@@ -252,38 +305,47 @@ class Node(EventEmitter):
 	def on_update(self, dt: float):
 		pass
 
-	def on_enter(self):
-		pass
+	def _on_load(self, event: LoadEvent):
+		if event.target == self:
+			self.on_load()
 
-	def on_entered(self):
-		for e, l in self._event_cbs.items():
-			for cb in l:
-				e.register(cb)
+	def _on_unload(self, event: LoadEvent):
+		if event.target == self:
+			self.on_unload()
 
-	def on_exit(self):
-		for e, l in self._event_cbs.items():
-			for cb in l:
-				e.unregister(cb)
+	def on_load(self):
+		if self._schedule_upadate_interval is not None:
+			assert self.scheduler is not None
+			self.scheduler.add_interval(self.on_update, self._schedule_upadate_interval)
 
-	def on_exited(self):
-		pass
+	def on_unload(self):
+		if self._update_task is not None:
+			self._update_task.cancel()
+			self._update_task = None
 
-def foreach_call(node: Node, callback, /, *, reverse: bool = False):
-	assert isinstance(node, Node)
-	assert callable(callback)
-	if reverse:
-		stk = [[True, node]]
-		while len(stk) > 0:
-			flag, n = stk[0]
-			if flag and n.children_len > 0:
-				stk.extend(n.children)
-				stk[0][0] = False
-			else:
-				stk.pop(0)
+	def foreach_child(self, callback: Callable[[Node], None], /, *, reverse: bool = False):
+		if reverse:
+			stk = [_Pack[bool, Node](True, self)]
+			while len(stk) > 0:
+				item = stk[-1]
+				n = item.b
+				if item.a and n.children_len > 0:
+					item.a = False
+					stk.extend(n.children)
+				else:
+					callback(n)
+					stk.pop(-1)
+		else:
+			que = [self]
+			while len(que) > 0:
+				n = que.pop(0)
 				callback(n)
-	else:
-		que = [node]
-		while len(que) > 0:
-			n = que.pop(0)
-			callback(n)
-			que.extend(n.children)
+				que.extend(n.children)
+
+T1 = TypeVar('T1')
+T2 = TypeVar('T2')
+
+class _Pack(Generic[T1, T2]):
+	def __init__(self, a: T1, b: T2):
+		self.a = a
+		self.b = b

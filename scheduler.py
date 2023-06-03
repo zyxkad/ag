@@ -23,6 +23,7 @@ class Task:
 		assert when >= 0
 		self._when = when
 		self._cb = cb
+		self._canceled = False
 
 	@property
 	def when(self) -> float:
@@ -32,8 +33,16 @@ class Task:
 	def callback(self) -> float:
 		return self._cb
 
+	@property
+	def canceled(self) -> bool:
+		return self._canceled
+
+	def cancel(self):
+		self._canceled = True
+
 	def _call(self, scheduler: SchedulerSelf):
-		self._cb()
+		if not self.canceled:
+			self._cb()
 
 	def __eq__(self, other):
 		return self.when == other.when
@@ -49,7 +58,7 @@ class IntervalTask(Task):
 		super().__init__(start, cb)
 		assert isinstance(interval, (int, float))
 		assert interval >= 0
-		self._last = -1
+		self._last: float = -1
 		self._interval = interval
 
 	@property
@@ -61,6 +70,8 @@ class IntervalTask(Task):
 		return self._interval
 
 	def _call(self, scheduler: SchedulerSelf):
+		if self.canceled:
+			return
 		now = scheduler.time
 		dt = now - self._last if self._last >= 0 else 0
 		self._last = now
@@ -75,12 +86,12 @@ class IntervalTask(Task):
 _sleep_offset = 0.0
 def _test_sleep_offset():
 	global _sleep_offset
-	x = 0
-	n = 0
-	s = 1
+	x: float = 0
+	n: float = 0
+	s: float = 1
 	while True:
 		if n < 10:
-			s = 0.1
+			s = 0.05
 		else:
 			s = 1
 		a = time.time()
@@ -97,11 +108,11 @@ Thread(target=_test_sleep_offset, daemon=True, name='test_sleep_offset').start()
 
 class Scheduler:
 	def __init__(self):
-		self._time = 0
+		self._time = 0.0
 		self._lock = RLock()
 		self._jobs = []
 		self._paused = False
-		self._timescale = 1
+		self._timescale = 1.0
 
 		self._looping = False
 

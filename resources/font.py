@@ -1,11 +1,14 @@
 # Copyright (C) 2023 zyxkad@gmail.com
 
+from __future__ import annotations
+
 from typing import Self
 from weakref import WeakValueDictionary
-import pygame
 
 from .color import *
 from .surface import *
+
+import pygame
 
 __all__ = [
 	'Font',
@@ -13,10 +16,12 @@ __all__ = [
 ]
 
 class Font:
-	_SYS_CACHE = WeakValueDictionary()
-	_LOCAL_CACHE = WeakValueDictionary()
+	_SYS_CACHE = WeakValueDictionary[tuple[str, int], 'Font']()
+	_LOCAL_CACHE = WeakValueDictionary[tuple[str, int], 'Font']()
 
-	def __new__(cls, *, sysname: str = None, path: str = None, size: int = 10, font_obj=None, cached: bool = True):
+	def __new__(cls, *, sysname: str | None = None, path: str | None = None,
+		size: int = 10,
+		font_obj: pygame.font.Font | None = None, cached: bool = True):
 		assert isinstance(sysname, (str, type(None)))
 		assert isinstance(path, (str, type(None)))
 		assert (sysname, path, font_obj).count(None) == 2
@@ -39,8 +44,15 @@ class Font:
 				cls._LOCAL_CACHE[(path, size)] = o
 		return o
 
+	_sysname: str | None
+	_path: str | None
+	_size: int
+	__font_obj: pygame.font.Font
+	_cache: dict[str, Font]
+
 	@classmethod
-	def __init(cls, self, *, sysname: str, path: str, size: int, font_obj):
+	def __init(cls, self, *, sysname: str | None, path: str | None,
+		size: int, font_obj: pygame.font.Font | None):
 		self._sysname = sysname
 		self._path = path
 		self._size = size
@@ -70,11 +82,17 @@ class Font:
 
 	@property
 	def sysname(self) -> str:
+		assert self._sysname is not None
 		return self._sysname
 
 	@property
 	def path(self) -> str:
+		assert self._path is not None
 		return self._path
+
+	@property
+	def size(self) -> int:
+		return self._size
 
 	@property
 	def native(self) -> object:
@@ -82,9 +100,9 @@ class Font:
 
 	def _load(self):
 		if self.issys:
-			self.__font_obj = pygame.font.SysFont(self._sysname, self._size)
+			self.__font_obj = pygame.font.SysFont(self.sysname, self.size)
 		elif self.islocal:
-			self.__font_obj = pygame.font.Font(self._path, self._size)
+			self.__font_obj = pygame.font.Font(self.path, self.size)
 
 	def copy(self) -> Self:
 		cls = self.__class__
@@ -114,7 +132,7 @@ class Font:
 			raise RuntimeError('Cannot copy native font obj')
 		return
 
-	def get_size(self, text: str) -> (int, int):
+	def get_size(self, text: str) -> tuple[int, int]:
 		assert isinstance(text, str)
 		return self.__font_obj.size(text)
 
@@ -189,12 +207,11 @@ class Font:
 			f.__font_obj.strikethrough = True
 		return self._get_style_or_set(''.join(sorted(set(self.style_codes) | {'s'})), setter)
 
-	def render(self, text: str, /, color: Color, antialias: bool = False, background: Color = None, *,
+	def render(self, text: str, /, color: Color, antialias: bool = False, background: Color | None = None, *,
 		bold: bool = False, italic: bool = False, underlined: bool = False, striketh: bool = False) -> Surface:
 		assert isinstance(color, Color)
-		color = pygame.Color(color.rgba)
-		if background is not None:
-			background = pygame.Color(background.rgba)
+		pcolor = pygame.Color(color.rgba)
+		pbackground = None if background is None else pygame.Color(background.rgba)
 		f = self
 		if bold:
 			f = f.bold
@@ -204,20 +221,22 @@ class Font:
 			f = f.striketh
 		if underlined:
 			f = f.underlined
-		s = Surface(f.__font_obj.render(text, antialias, color, background))
+		s = Surface(f.__font_obj.render(text, antialias, pcolor, pbackground))
 		return s
 
 class FontSet:
-	def __init__(self, normal: Font, size: int = None, *,
-		bold: Font = None, italic: Font = None, underlined: Font = None,
-		bold_italic: Font = None, bold_underlined: Font = None, italic_underlined: Font = None,
-		bold_italic_underlined: Font = None):
-		if isinstance(normal, str):
-			normal = Font(path=normal, size=size)
-		elif size is None:
+	def __init__(self, normal: Font | str, size: int | None = None, *,
+		bold: Font | None = None, italic: Font | None = None, underlined: Font | None = None,
+		bold_italic: Font | None = None, bold_underlined: Font | None = None, italic_underlined: Font | None = None,
+		bold_italic_underlined: Font | None = None):
+		if size is None:
+			assert isinstance(normal, Font)
 			size = normal.fontsize
+		elif isinstance(normal, str):
+			normal = Font(path=normal, size=size)
 		else:
 			normal = normal.set_fontsize(size)
+		assert isinstance(normal, Font)
 		if isinstance(bold, str):
 			bold = Font(path=bold, size=size)
 		elif bold is not None:
@@ -232,7 +251,7 @@ class FontSet:
 			underlined = Font(path=underlined, size=size)
 		elif underlined is not None:
 			assert isinstance(underlined, Font)
-			assert underlined.fontsize == sizez
+			assert underlined.fontsize == size
 		if isinstance(bold_italic, str):
 			bold_italic = Font(path=bold_italic, size=size)
 		elif bold_italic is not None:
@@ -326,12 +345,11 @@ class FontSet:
 			return self._u.bold.italic
 		return self.normal.bold.italic.underlined
 
-	def render(self, text: str, /, color: Color, antialias: bool = False, background: Color = None, *,
+	def render(self, text: str, /, color: Color, antialias: bool = False, background: Color | None = None, *,
 		bold: bool = False, italic: bool = False, underlined: bool = False, striketh: bool = False) -> Surface:
 		assert isinstance(color, Color)
-		color = pygame.Color(color.rgba)
-		if background is not None:
-			background = pygame.Color(background.rgba)
+		pcolor = pygame.Color(color.rgba)
+		pbackground = None if background is None else pygame.Color(background.rgba)
 		f = self.normal
 		sty = ''
 		if bold:
@@ -356,5 +374,5 @@ class FontSet:
 			f = self.bold_italic_underlined
 		if striketh:
 			f = f.striketh
-		s = Surface(f.__font_obj.render(text, antialias, color, background))
+		s = Surface(f.__font_obj.render(text, antialias, pcolor, pbackground))
 		return s

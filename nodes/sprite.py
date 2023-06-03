@@ -7,7 +7,7 @@ __all__ = [
 	'Sprite',
 ]
 
-class SpriteFrame:
+class SpriteFrame: # TODO
 	def __init__(self, textrue, keep: float = 0.1):
 		self._textrue = textrue
 		self._keep = keep
@@ -19,7 +19,7 @@ class SpriteFrame:
 class Sprite(Node):
 	def __init__(self, parent: Node | None = None, **kwargs):
 		super().__init__(parent, **kwargs)
-		self._frames = []
+		self._frames: list[SpriteFrame] = []
 
 	@property
 	def frames(self) -> list[SpriteFrame]:

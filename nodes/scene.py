@@ -15,7 +15,7 @@ class UILayer(Layer):
 	pass
 
 class Scene(Node):
-	def __init__(self, *layers: list[Layer], **kwargs):
+	def __init__(self, *layers: Layer, **kwargs):
 		super().__init__(**kwargs)
 		self._active = False
 		for l in layers:
@@ -25,10 +25,10 @@ class Scene(Node):
 	def is_active(self) -> bool:
 		return self._active
 
-	def on_entered(self):
-		super().on_entered()
+	def on_load(self):
+		super().on_load()
 		self._active = True
 
-	def on_exit(self):
-		super().on_exit()
+	def on_unload(self):
+		super().on_unload()
 		self._active = False

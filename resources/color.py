@@ -1,15 +1,17 @@
 # Copyright (C) 2023 zyxkad@gmail.com
 
-from typing import TypeVar
+from __future__ import annotations
+
+from typing import TypeVar, Self
 
 __all__ = [
 	'Color',
 	'Colors',
 ]
 
-Self = TypeVar('Self', bound='Color')
-
 class Color:
+	__slots__ = ('_r', '_g', '_b', '_a')
+
 	def __init__(self, r: int, g: int, b: int, a: int = 0xff):
 		assert isinstance(r, int) and 0 <= r and r <= 0xff
 		assert isinstance(g, int) and 0 <= g and g <= 0xff
@@ -21,7 +23,7 @@ class Color:
 		self._a = a
 
 	@classmethod
-	def from_rgb(cls, r, g, b):
+	def from_rgb(cls, r: int | float, g: int | float, b: int | float):
 		if isinstance(r, float):
 			assert 0.0 <= r and r <= 1.0
 			r = int(r * 0xff)
@@ -34,7 +36,7 @@ class Color:
 		return cls(r, g, b, 0xff)
 
 	@classmethod
-	def from_rgba(cls, r, g, b, a):
+	def from_rgba(cls, r: int | float, g: int | float, b: int | float, a: int | float):
 		if isinstance(r, float):
 			assert 0.0 <= r and r <= 1.0
 			r = int(r * 0xff)
@@ -50,17 +52,23 @@ class Color:
 		return cls(r, g, b, a)
 
 	@classmethod
-	def from_html_rgb(cls, rgb):
-		assert isinstance(v, int) and 0 <= rgb and rgb <= 0xffffff
+	def from_html_rgb(cls, rgb: int):
+		assert 0 <= rgb and rgb <= 0xffffff
 		return cls(rgb >> 16, (rgb >> 8) & 0xff, rgb & 0xff, 0xff)
 
 	@classmethod
-	def from_html_rgba(cls, rgba):
-		assert isinstance(v, int) and 0 <= rgba and rgba <= 0xffffffff
+	def from_html_rgba(cls, rgba: int):
+		assert 0 <= rgba and rgba <= 0xffffffff
 		return cls(rgba >> 24, (rgba >> 16) & 0xff, (rgba >> 8) & 0xff, rgba & 0xff)
 
-	def copy(self) -> Self:
-		return self.__class__(self.r, self.g, self.b, self.a)
+	def _clone(self) -> Self:
+		cls = self.__class__
+		obj = cls.__new__(cls)
+		obj._r = self.r
+		obj._g = self.g
+		obj._b = self.b
+		obj._a = self.a
+		return obj
 
 	@property
 	def r(self) -> int:
@@ -68,7 +76,7 @@ class Color:
 
 	def set_r(self, v: int) -> Self:
 		assert isinstance(v, int) and 0 <= v and v <= 0xff
-		c = self.copy()
+		c = self._clone()
 		c._r = v
 		return c
 
@@ -78,7 +86,7 @@ class Color:
 
 	def set_g(self, v: int) -> Self:
 		assert isinstance(v, int) and 0 <= v and v <= 0xff
-		c = self.copy()
+		c = self._clone()
 		c._g = v
 		return c
 
@@ -88,7 +96,7 @@ class Color:
 
 	def set_b(self, v: int) -> Self:
 		assert isinstance(v, int) and 0 <= v and v <= 0xff
-		c = self.copy()
+		c = self._clone()
 		c._b = v
 		return c
 
@@ -98,7 +106,7 @@ class Color:
 
 	def set_a(self, v: int) -> Self:
 		assert isinstance(v, int) and 0 <= v and v <= 0xff
-		c = self.copy()
+		c = self._clone()
 		c._a = v
 		return c
 
@@ -159,10 +167,10 @@ class Color:
 		assert isinstance(other, Color)
 		return not (self.visible or other.visible) or (self.a >= other.a and self.html_rgb >= other.html_rgb)
 
-	def __and__(self, other: Self) -> Self:
+	def __and__(self, other: Self) -> Color:
 		return Color(self.r & other.r, self.g & other.g, self.b & other.b, self.a & other.a)
 
-	def __or__(self, other: Self) -> Self:
+	def __or__(self, other: Self) -> Color:
 		return Color(self.r | other.r, self.g | other.g, self.b | other.b, self.a | other.a)
 
 class Colors:
