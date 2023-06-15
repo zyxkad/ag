@@ -1,0 +1,27 @@
+
+[tool.ruff]
+
+# ignore = [
+# 	"F403",
+# 	"E701",
+# ]
+
+line-length = 100
+
+[tool.mypy]
+
+# ignore_missing_imports = true
+
+[tool.poetry]
+
+name = "ag"
+version = "0.0.0"
+description = "A Game framework"
+authors = [
+	"Kevin Z <zyxkad@gmail.com>"
+]
+readme = "README.MD"
+
+[tool.poetry.dependencies]
+python = "^3.10"
+

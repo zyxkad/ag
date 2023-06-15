@@ -4,7 +4,7 @@ import enum
 import sys
 import time
 
-from .resources import Color, Colors, Vec2, Surface
+from .resources import Color, Colors, Vec2, Surface, Anchor
 from .camera import Camera, CameraSurface
 from .nodes import Node, Scene, UILayer
 from .event import (Event, EventTarget, LOWEST_PRIORITY,
@@ -28,7 +28,6 @@ class QuitBehavior(enum.Enum):
 
 class Director(EventTarget):
 	INSTANCE = None
-
 	_double_click_interval = 0.4
 
 	def __new__(cls, *args, **kwargs):
@@ -108,11 +107,15 @@ class Director(EventTarget):
 		self.__real_fps = 0.0
 		pygame.init()
 
-	def init_with_window(self, size: Vec2, title: str | None = None):
+	def init_with_window(self, size: Vec2 | tuple[float, float], title: str | None = None, *,
+		fps: float = 30.0):
 		self.init()
+		if not isinstance(size, Vec2):
+			size = Vec2(size)
 		self.winsize = size
 		if title is not None:
 			self.title = title
+		self.fps = fps
 
 	def destroy(self):
 		if self._inited:
@@ -153,8 +156,8 @@ class Director(EventTarget):
 		return Vec2(pygame.display.get_window_size())
 
 	@winsize.setter
-	def winsize(self, size: Vec2 | tuple[float, float]):
-		pygame.display.set_mode(tuple(size))
+	def winsize(self, size: Vec2):
+		pygame.display.set_mode(size.xy)
 
 	@property
 	def title(self) -> str:
@@ -192,12 +195,13 @@ class Director(EventTarget):
 	def is_keydown(self, key: int) -> bool:
 		return self._keymap.get(key, False)
 
-	def __get_ctrl_keys(self) -> dict[str, bool]:
+	def __get_ctrl_keys(self) -> dict:
 		return {
 			'alt': self.is_keydown(pygame.K_LALT) or self.is_keydown(pygame.K_RALT),
 			'ctrl': self.is_keydown(pygame.K_LCTRL) or self.is_keydown(pygame.K_RCTRL),
 			'meta': self.is_keydown(pygame.K_LMETA) or self.is_keydown(pygame.K_RMETA),
 			'shift': self.is_keydown(pygame.K_LSHIFT) or self.is_keydown(pygame.K_RSHIFT),
+			'buttons': self.mouseflags,
 		}
 
 	@property
@@ -209,17 +213,20 @@ class Director(EventTarget):
 
 	def _get_reachable_node_at(self, x: int, y: int) -> list[tuple[Node, Vec2]]:
 		assert self.current_scene is not None, 'Main loop is not running'
-		pos = Vec2(x - self.camera.x, y - self.camera.y)
-		nodes = self.current_scene._get_reachable_nodes_by_pos(pos)
+		pos = Vec2(x, y)
+		cpos = Vec2(self.camera.x - self.winsize.x // 2, self.camera.y - self.winsize.y // 2)
+		nodes = self.current_scene._get_reachable_ui_by_pos(pos) or \
+			self.current_scene._get_reachable_nodes_by_pos(cpos)
 		return [(self.current_scene, pos)] if nodes is None else nodes
 
 	def __on_mouse_move(self, dx: int, dy: int, x: int, y: int) -> bool:
 		targets = self._get_reachable_node_at(x, y)
 		target = targets[0][0]
+		kwargs = self.__get_ctrl_keys()
 		e = MouseMoveEvent(target, dx=dx, dy=dy,
 			x=x, y=y, viewX=x - self.camera.x, viewY=y - self.camera.y,
-			screenX=x, screenY=y, buttons=self.mouseflags,
-			**self.__get_ctrl_keys())
+			screenX=x, screenY=y,
+			**kwargs)
 		if not self.dispatch(e, capture=True):
 			return False
 		for n, pos in reversed(targets):
@@ -232,33 +239,26 @@ class Director(EventTarget):
 				return False
 		if not self.dispatch(e, capture=False):
 			return False
-		if self._mousemoving is not target:
-			old = self._mousemoving
+		old = self._mousemoving
+		if old is not target:
 			if old is not None:
+				print('moveout:', old)
 				old.dispatch(MouseOverEvent('mouseleave', old, target,
-					x=x, y=y, viewX=x - self.camera.x, viewY=y - self.camera.y,
-					screenX=x, screenY=y, buttons=self.mouseflags,
-					**self.__get_ctrl_keys()))
+					**kwargs))
 				old.dispatch(MouseOverEvent('mouseout', old, target, bubbles=True,
-					x=x, y=y, viewX=x - self.camera.x, viewY=y - self.camera.y,
-					screenX=x, screenY=y, buttons=self.mouseflags,
-					**self.__get_ctrl_keys()))
+					**kwargs))
 			self._mousemoving = target
 			target.dispatch(MouseOverEvent('mouseenter', target, old,
-				x=x, y=y, viewX=x - self.camera.x, viewY=y - self.camera.y,
-				screenX=x, screenY=y, buttons=self.mouseflags,
-				**self.__get_ctrl_keys()))
+				**kwargs))
 			target.dispatch(MouseOverEvent('mouseover', target, old, bubbles=True,
-				x=x, y=y, viewX=x - self.camera.x, viewY=y - self.camera.y,
-				screenX=x, screenY=y, buttons=self.mouseflags,
-				**self.__get_ctrl_keys()))
+				**kwargs))
 		return True
 
 	def __dispatch_click_event(self, etype: str, btn: int, x: int, y: int, targets: list[tuple[Node, Vec2]]) -> bool:
 		target = targets[0][0]
 		e = MouseClickEvent(etype, target, btn,
 			x=x, y=y, viewX=x - self.camera.x, viewY=y - self.camera.y,
-			screenX=x, screenY=y, buttons=self.mouseflags,
+			screenX=x, screenY=y,
 			**self.__get_ctrl_keys())
 		if not self.dispatch(e, capture=True):
 			return False
@@ -284,14 +284,18 @@ class Director(EventTarget):
 				if time.time() - self.__last_click <= self._double_click_interval:
 					self.__dbclick = True
 				self.__last_click = None
-		if self._focused is not target:
-			if self._focused is not None:
-				self._focused.dispatch(UIEvent('focusout', self._focused))
-				self._focused._focusing = False
-			if target.selectable and target.dispatch(UIEvent('focusin', target, cancelable=True)):
+		old = self._focused
+		if old is not target:
+			if old is not None:
+				old.dispatch(UIEvent('focusout', old))
+				old._focusing = False
+				self._focused = None
+				old.dispatch(UIEvent('blur', old, bubbles=False))
+			if target.selectable:
+				target.dispatch(UIEvent('focusin', target))
 				self._focused = target
 				target._focusing = True
-				target.dispatch(UIEvent('focus', target))
+				target.dispatch(UIEvent('focus', target, bubbles=False))
 
 	def __on_mouse_up(self, btn: int, x: int, y: int) -> None:
 		self._mouseflags &= ~(1 << btn)
@@ -342,9 +346,17 @@ class Director(EventTarget):
 			elif event.type == pygame.ACTIVEEVENT:
 				pass # { gain: int-bool, state: 1 for pointer; 2 for focus }
 			elif event.type == pygame.WINDOWENTER:
-				self.dispatch(UIEvent('mouseenter', self))
+				self.dispatch(MouseOverEvent('mouseenter', self, None, **self.__get_ctrl_keys()))
 			elif event.type == pygame.WINDOWLEAVE:
-				self.dispatch(UIEvent('mouseleave', self))
+				kwargs = self.__get_ctrl_keys()
+				self.dispatch(MouseOverEvent('mouseleave', self, None, **kwargs))
+				old_moving = self._mousemoving
+				if old_moving is not None:
+					old_moving.dispatch(MouseOverEvent('mouseleave', old_moving, None,
+						**kwargs))
+					old_moving.dispatch(MouseOverEvent('mouseout', old_moving, None, bubbles=True,
+						**kwargs))
+					self._mousemoving = None
 			elif event.type == pygame.WINDOWFOCUSGAINED:
 				self.dispatch(UIEvent('winfocusin', self))
 			elif event.type == pygame.WINDOWFOCUSLOST:
@@ -365,26 +377,41 @@ class Director(EventTarget):
 		osurface = pygame.display.get_surface()
 		surface = CameraSurface(self.camera, osurface)
 		surface.fill(self.clear_color)
+		sorigin = Surface(osurface)
 
-		self.current_scene.on_draw(surface.get_origin())
-		uis = []
-		lys = []
-		for c in self.current_scene.children:
-			if isinstance(c, UILayer):
-				uis.append(c)
-			else:
-				lys.append(c)
-		que = list(sorted(uis, key=lambda n: n.z_index, reverse=True))
-		que.extend(sorted(lys, key=lambda n: n.z_index, reverse=True))
-		while len(que) > 0:
-			n = que.pop(-1)
-			que.extend(sorted(n.children, key=lambda n: n.z_index, reverse=True))
-			if isinstance(n, UILayer):
-				n.on_draw(surface.get_origin())
-			elif n.width >= 0 and n.height >= 0:
-				s = Surface((n.width, n.height))
-				n.on_draw(s)
-				surface.blit(s, Vec2(n.x, n.y))
+		if self.current_scene.visible:
+			s = Surface(sorigin.size)
+			self.current_scene.on_draw(s)
+			sorigin.blit(s, (0, 0), anchor=Anchor.TOP_LEFT)
+			uis: list[Node] = []
+			lys: list[Node] = []
+			for c in self.current_scene.children:
+				if isinstance(c, UILayer):
+					uis.append(c)
+				else:
+					lys.append(c)
+			while len(lys) > 0:
+				n = lys.pop(-1)
+				if not n.visible:
+					continue
+				lys.extend(n.children)
+				if n.width >= 0 and n.height >= 0:
+					s = Surface((n.width, n.height))
+					n.on_draw(s)
+					surface.blit(s, n.pos, anchor=n.anchor)
+			while len(uis) > 0:
+				n = uis.pop(-1)
+				if not n.visible:
+					continue
+				uis.extend(n.children)
+				if isinstance(n, UILayer):
+					s = Surface(sorigin.size)
+					n.on_draw(s)
+					sorigin.blit(s, (0, 0), anchor=Anchor.TOP_LEFT)
+				elif n.width >= 0 and n.height >= 0:
+					s = Surface((n.width, n.height))
+					n.on_draw(s)
+					sorigin.blit(s, n.pos, anchor=n.anchor)
 		pygame.display.update()
 
 	@property
@@ -406,14 +433,16 @@ class Director(EventTarget):
 		self._loop()
 
 	def push_scene(self, scene: Scene):
-		assert self.current_scene is not None, 'Cannot use `push_scene` to start main loop'
+		old = self.current_scene
+		assert old is not None, 'Cannot use `push_scene` to start main loop'
+		old.foreach_child(lambda n: n.dispatch(LoadEvent('unload', n)))
 		scene.scheduler = self.scheduler
 		self._scenes.append(scene)
 		scene.foreach_child(lambda n: n.dispatch(LoadEvent('load', n)))
 
 	def pop_scene(self):
-		assert self.current_scene is not None, 'Main loop is not running'
-		old = self._scenes[-1]
+		old = self.current_scene
+		assert old is not None, 'Main loop is not running'
 		old.foreach_child(lambda n: n.dispatch(LoadEvent('unload', n)))
 		self._scenes.pop(-1)
 		if len(self._scenes) == 0:

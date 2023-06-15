@@ -17,8 +17,8 @@ class SpriteFrame: # TODO
 		return self._keep
 
 class Sprite(Node):
-	def __init__(self, parent: Node | None = None, **kwargs):
-		super().__init__(parent, **kwargs)
+	def __init__(self, **kwargs):
+		super().__init__(**kwargs)
 		self._frames: list[SpriteFrame] = []
 
 	@property

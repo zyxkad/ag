@@ -56,7 +56,7 @@ class Event:
 		return self._current_target
 
 EventT = TypeVar('EventT', bound=Event)
-EventCallback: TypeAlias = Callable[[EventT], None]
+EventCallback: TypeAlias = Callable[[EventT], None] | Callable[[], None]
 
 class _Subscriber:
 	def __init__(self, cb: EventCallback, priority: int | _EndlessPriority, *, once: bool):
@@ -86,30 +86,37 @@ class _Subscriber:
 	def __gt__(self, other) -> bool:
 		return self.priority is HIGHEST_PRIORITY or (self.priority is not LOWEST_PRIORITY and self.priority > other.priority)
 
-class _WrappedMethod:
-	def __init__(self, etype: str, cb: EventCallback,
+class _WrappedMethodInfo: # TODO: Define __get__ method? or just use the attr
+	def __init__(self, etype: str,
 		capture: bool = False, *,
 		priority: int | _EndlessPriority = 0, once: bool = False):
 		self.etype = etype
 		self.iscapture = capture
-		self.subscriber = _Subscriber(cb, priority, once=once)
-
-	def __call__(self, *args, **kwargs):
-		return self.subscriber.callback(*args, **kwargs)
+		self.priority = priority
+		self.once = once
 
 def on(etype: str,
 	capture: bool = False, *,
 	priority: int | _EndlessPriority = 0, once: bool = False):
-	def wrapper(cb: EventCallback):
-		return functools.wraps(cb)(_WrappedMethod(etype, cb, capture, priority=priority, once=once))
+	info = _WrappedMethodInfo(etype, capture, priority=priority, once=once)
+	def wrapper(cb: Callable[[EventTarget, EventT], None]):
+		l = getattr(cb, '__registered_events__', None)
+		if l is None:
+			l = []
+			setattr(cb, '__registered_events__', l)
+		l.append(info)
+		return cb
 	return wrapper
 
 class EventTarget:
-	__cls_listeners: list[_WrappedMethod]
+	__cls_listeners: list[Callable[[EventTarget, EventT], None]]
 
 	def __init_subclass__(cls, **kwargs):
 		super().__init_subclass__(**kwargs)
-		cls.__cls_listeners = [f for f in vars(cls).values() if isinstance(f, _WrappedMethod)]
+		cls.__cls_listeners = [f for f in vars(cls).values() if hasattr(f, '__registered_events__')]
+		for c in cls.__bases__:
+			if issubclass(c, EventTarget) and c is not EventTarget:
+				cls.__cls_listeners.extend(c.__cls_listeners)
 
 	def __init__(self):
 		cls = self.__class__
@@ -117,18 +124,22 @@ class EventTarget:
 		self._listeners: dict[str, tuple[list[_Subscriber], list[_Subscriber]]] = {}
 
 		for f in cls.__cls_listeners:
-			listeners2 = self._listeners.get(f.etype, None)
-			if listeners2 is None:
-				self._listeners[f.etype] = ([f.subscriber], []) if f.iscapture else ([], [f.subscriber])
-			else:
-				listeners = listeners2[0 if f.iscapture else 1]
-				if f.subscriber.priority is HIGHEST_PRIORITY:
-					listeners.append(f.subscriber)
+			for info in getattr(f, '__registered_events__', []):
+				listeners2 = self._listeners.get(info.etype, None)
+				subscriber = _Subscriber((lambda cb:
+					lambda event: dyn_call(cb, self, event))(f),
+				info.priority, once=info.once)
+				if listeners2 is None:
+					self._listeners[info.etype] = ([subscriber], []) if info.iscapture else ([], [subscriber])
 				else:
-					i = 0
-					if f.subscriber.priority is not LOWEST_PRIORITY:
-						i = binSearch(listeners, target=f.subscriber)
-					listeners.insert(i, f.subscriber)
+					listeners = listeners2[0 if info.iscapture else 1]
+					if info.priority is HIGHEST_PRIORITY:
+						listeners.append(subscriber)
+					else:
+						i = 0
+						if subscriber.priority is not LOWEST_PRIORITY:
+							i = binSearch(listeners, target=subscriber)
+						listeners.insert(i, subscriber)
 
 	def dispatch(self, event: Event, capture: bool | None = None) -> bool:
 		if event.type not in self._listeners:
@@ -165,6 +176,14 @@ class EventTarget:
 						i = binSearch(listeners, target=s)
 					listeners.insert(i, s)
 		return cb
+
+	def on(self, etype: str,
+		capture: bool = False, *,
+		priority: int | _EndlessPriority = 0, once: bool = False):
+		def wrapper(cb: EventCallback):
+			self.register(etype, cb, priority=priority, once=once, capture=capture)
+			return cb
+		return wrapper
 
 	def unregister(self, etype: str, cb: EventCallback | None = None, capture: bool = False) -> None:
 		with self._lock:

@@ -17,3 +17,7 @@ __all__.extend(surface.__all__)
 from .font import *
 from . import font
 __all__.extend(font.__all__)
+
+from .texture import *
+from . import texture
+__all__.extend(texture.__all__)

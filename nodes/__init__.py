@@ -10,6 +10,10 @@ from .scene import *
 from . import scene
 __all__.extend(scene.__all__)
 
+from .ui import *
+from . import ui
+__all__.extend(ui.__all__)
+
 from .sprite import *
 from . import sprite
 __all__.extend(sprite.__all__)

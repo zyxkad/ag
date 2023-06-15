@@ -51,38 +51,42 @@ class CameraSurface(Surface):
 	def copy(self) -> CameraSurface:
 		return CameraSurface(self.camera, self._obj.copy())
 
+	@property
+	def camera_center_pos(self) -> Vec2:
+		return Vec2(self.camera.x - self.size.x // 2, self.camera.y - self.size.y // 2)
+
 	def fill(self, color: Color, dest: Rect | None = None):
-		cdx, cdy = self.camera.x - self.size.x // 2, self.camera.y - self.size.y // 2
+		cdx, cdy = self.camera_center_pos
 		if dest is not None:
 			dest = dest.sub_xy((cdx, cdy))
 		super().fill(color, dest)
 
 	def circle(self, color: Color, center: tuple[float, float], *args, **kwargs):
-		cdx, cdy = self.camera.x - self.size.x // 2, self.camera.y - self.size.y // 2
+		cdx, cdy = self.camera_center_pos
 		x, y = center
 		x -= cdx
 		y -= cdy
 		super().circle(color, (x, y), *args, **kwargs)
 
 	def polygon(self, color: Color, points: Iterable[Vec2], width: int = 0):
-		cdx, cdy = self.camera.x - self.size.x // 2, self.camera.y - self.size.y // 2
+		cdx, cdy = self.camera_center_pos
 		super().polygon(color,
 			[Vec2(p.x - cdx, p.y - cdy) for p in points],
 			width=width)
 
 	def blit(self, src: Surface | pygame.Surface, dest: Vec2 | tuple[float, float], anchor: Anchor = Anchor.CENTER):
-		cdx, cdy = self.camera.x - self.size.x // 2, self.camera.y - self.size.y // 2
+		cdx, cdy = self.camera_center_pos
 		if isinstance(dest, tuple):
 			dest = Vec2(dest)
 		dest -= (cdx, cdy)
 		super().blit(src, dest, anchor=anchor)
 
 	def get_at(self, pos: tuple[int, int]) -> Color:
-		cdx, cdy = int(self.camera.x - self.size.x // 2), int(self.camera.y - self.size.y // 2)
+		cdx, cdy = self.camera_center_pos
 		x, y = pos
-		return super().get_at((x - cdx, y - cdy))
+		return super().get_at((int(x - cdx), int(y - cdy)))
 
 	def set_at(self, pos: tuple[int, int], color: Color):
-		cdx, cdy = int(self.camera.x - self.size.x // 2), int(self.camera.y - self.size.y // 2)
+		cdx, cdy = self.camera_center_pos
 		x, y = pos
-		super().set_at((x - cdx, y - cdy), color)
+		super().set_at((int(x - cdx), int(y - cdy)), color)

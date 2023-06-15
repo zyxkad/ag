@@ -1,5 +1,7 @@
 # Copyright (C) 2023 zyxkad@gmail.com
 
+from ..event import on
+from ..resources import Vec2
 from .node import Node
 
 __all__ = [
@@ -15,20 +17,28 @@ class UILayer(Layer):
 	pass
 
 class Scene(Node):
-	def __init__(self, *layers: Layer, **kwargs):
-		super().__init__(**kwargs)
-		self._active = False
-		for l in layers:
-			self.add_child(l)
-
 	@property
 	def is_active(self) -> bool:
-		return self._active
+		return self.loaded
 
-	def on_load(self):
-		super().on_load()
-		self._active = True
+	def _get_reachable_ui_by_pos(self, pos: Vec2) -> list[tuple[Node, Vec2]] | None:
+		if self.visible:
+			for c in reversed(self._children):
+				if isinstance(c, UILayer):
+					npos = pos - c.pos
+					n = c._get_reachable_nodes_by_pos(npos)
+					if n is not None:
+						n.append((self, pos))
+						return n
+		return None
 
-	def on_unload(self):
-		super().on_unload()
-		self._active = False
+	def _get_reachable_nodes_by_pos(self, pos: Vec2) -> list[tuple[Node, Vec2]] | None:
+		if self.visible:
+			for c in reversed(self._children):
+				if not isinstance(c, UILayer):
+					npos = pos - c.pos
+					n = c._get_reachable_nodes_by_pos(npos)
+					if n is not None:
+						n.append((self, pos))
+						return n
+		return None

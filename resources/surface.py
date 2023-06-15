@@ -26,27 +26,28 @@ class Anchor(enum.Enum):
 	BOTTOM_CENTER = enum.auto()
 	BOTTOM_RIGHT = enum.auto()
 
-	def convert_pos(self, pos: Vec2 | tuple[float, float], size: Vec2) -> Vec2:
+	def convert_pos(self, pos: Vec2 | tuple[float, float], size: Vec2, *, reversed: bool = False) -> Vec2:
+		oper = (lambda a, b: a + b) if reversed else (lambda a, b: a - b)
 		if isinstance(pos, tuple):
 			pos = Vec2(pos)
 		if self is Anchor.TOP_LEFT:
 			return pos
 		if self is Anchor.TOP_CENTER:
-			return Vec2(pos.x - size.x / 2, pos.y)
+			return Vec2(oper(pos.x, size.x / 2), pos.y)
 		if self is Anchor.TOP_RIGHT:
-			return Vec2(pos.x - size.x, pos.y)
+			return Vec2(oper(pos.x, size.x), pos.y)
 		if self is Anchor.BOTTOM_LEFT:
-			return Vec2(pos.x, pos.y - size.y)
+			return Vec2(pos.x, oper(pos.y, size.y))
 		if self is Anchor.BOTTOM_CENTER:
-			return Vec2(pos.x - size.x / 2, pos.y - size.y)
+			return Vec2(oper(pos.x, size.x / 2), oper(pos.y, size.y))
 		if self is Anchor.BOTTOM_RIGHT:
-			return pos - size
+			return oper(pos, size)
 		if self is Anchor.LEFT_CENTER:
-			return Vec2(pos.x, pos.y - size.y / 2)
+			return Vec2(pos.x, oper(pos.y, size.y / 2))
 		if self is Anchor.CENTER:
-			return pos - size / 2
+			return oper(pos, size / 2)
 		if self is Anchor.RIGHT_CENTER:
-			return Vec2(pos.x - size.x, pos.y - size.y / 2)
+			return Vec2(oper(pos.x, size.x), oper(pos.y, size.y / 2))
 		raise RuntimeError('Unexpect status')
 
 Self = TypeVar('Self', bound='Surface')

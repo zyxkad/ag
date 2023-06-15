@@ -30,30 +30,39 @@ class QuitEvent(Event):
 		super().__init__('quit', bubbles=False, cancelable=True)
 
 class UIEvent(Event):
-	def __init__(self, etype: str, target: EventTarget | None, *,
+	def __init__(self, etype: str, target: EventTarget, *,
 		bubbles: bool = True, cancelable: bool = False):
 		super().__init__(etype, bubbles=bubbles, cancelable=cancelable)
 		self._target = target
 
 	@property
-	def target(self) -> EventTarget | None:
+	def target(self) -> EventTarget:
 		return self._target
 
 class LoadEvent(UIEvent):
-	def __init__(self, etype: str, target: EventTarget | None, *,
-		bubbles: bool = True, cancelable: bool = False):
+	def __init__(self, etype: str, target: EventTarget, *,
+		bubbles: bool = False, cancelable: bool = False):
 		assert etype in ('load', 'unload')
 		super().__init__(etype, target, bubbles=bubbles, cancelable=cancelable)
 
 class _KeyEvent(UIEvent):
-	def __init__(self, etype: str, target: EventTarget | None, *,
+	def __init__(self, etype: str, target: EventTarget, *,
+		buttons: int,
 		alt: bool, ctrl: bool, meta: bool, shift: bool,
 		bubbles: bool = True, cancelable: bool = True):
 		super().__init__(etype, target, bubbles=bubbles, cancelable=cancelable)
+		self._buttons = buttons
 		self._alt = alt
 		self._ctrl = ctrl
 		self._meta = meta
 		self._shift = shift
+
+	@property
+	def buttons(self) -> int:
+		return self._buttons
+
+	def is_button_down(self, btn: int) -> bool:
+		return bool(self.buttons & (1 << btn))
 
 	@property
 	def alt(self) -> bool:
@@ -73,12 +82,14 @@ class _KeyEvent(UIEvent):
 
 @final
 class KeyboardEvent(_KeyEvent):
-	def __init__(self, etype: str, target: EventTarget | None, key: int,
+	def __init__(self, etype: str, target: EventTarget, key: int, *,
+		buttons: int,
 		alt: bool, ctrl: bool, meta: bool, shift: bool,
 		bubbles: bool = True, cancelable: bool = True):
 		assert etype in ('keydown', 'keyup')
 		super().__init__(etype, target,
 			alt=alt, ctrl=ctrl, meta=meta, shift=shift,
+			buttons=buttons,
 			bubbles=bubbles, cancelable=cancelable)
 		self._key = key
 
@@ -103,6 +114,7 @@ class MouseEvent(_KeyEvent):
 			'mouseenter', 'mouseover', 'mouseleave', 'mouseout')
 		super().__init__(etype, target,
 			alt=alt, ctrl=ctrl, meta=meta, shift=shift,
+			buttons=buttons,
 			bubbles=bubbles, cancelable=cancelable)
 		self._x = x
 		self._y = y
@@ -110,11 +122,6 @@ class MouseEvent(_KeyEvent):
 		self._viewY = viewY
 		self._screenX = screenX
 		self._screenY = screenY
-		self._buttons = buttons
-
-	@property
-	def buttons(self) -> int:
-		return self._buttons
 
 	@property
 	def x(self) -> float:
@@ -167,8 +174,8 @@ class MouseMoveEvent(MouseEvent):
 		return self._dy
 
 @final
-class MouseOverEvent(MouseEvent):
-	def __init__(self, etype: str, target: EventTarget, related_target: EventTarget | None,
+class MouseOverEvent(_KeyEvent):
+	def __init__(self, etype: str, target: EventTarget, related_target: EventTarget | None, *,
 		bubbles: bool = False, cancelable: bool = False,
 		**kwargs):
 		assert etype in ('mouseenter', 'mouseover', 'mouseleave', 'mouseout')
